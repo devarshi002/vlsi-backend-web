@@ -1,6 +1,5 @@
-import asyncio
 import logging
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, BackgroundTasks
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -14,38 +13,38 @@ router = APIRouter(prefix="/api", tags=["Enquiry"])
 limiter = Limiter(key_func=get_remote_address)
 
 
-def _run_side_effects(data: dict, form_type: str):
-    """
-    Fire email + sheets in background threads so the API
-    responds immediately without waiting for SMTP / Sheets API.
-    """
-    loop = asyncio.get_event_loop()
+async def run_side_effects(data: dict, form_type: str):
+    """Run email and sheets as FastAPI background tasks."""
+    logger.info(f"[side_effects] Starting for {data.get('name')} via {form_type}")
+    
+    # Email
+    email_result = send_alert_email(data, form_type)
+    logger.info(f"[side_effects] Email result: {email_result}")
+    
+    # Sheets
+    sheets_result = append_to_sheet(data)
+    logger.info(f"[side_effects] Sheets result: {sheets_result}")
 
-    # Email alert
-    loop.run_in_executor(None, send_alert_email, data, form_type)
 
-    # Google Sheets
-    loop.run_in_executor(None, append_to_sheet, data)
-
-
-# ── Popup form ──────────────────────────────────────────────────────────────
+# ── Popup form ──────────────────────────────────────────────
 
 @router.post("/enquiry/popup", response_model=EnquiryResponse)
-@limiter.limit("5/minute")          # max 5 submissions per IP per minute
-async def popup_enquiry(request: Request, body: PopupEnquiry):
-    """
-    Handles the scroll-triggered popup form.
-    Rate limited: 5 requests / minute per IP.
-    """
+@limiter.limit("5/minute")
+async def popup_enquiry(
+    request: Request,
+    body: PopupEnquiry,
+    background_tasks: BackgroundTasks
+):
     try:
         data = body.model_dump()
+        logger.info(f"[popup] Received from {data.get('name')} — {data.get('phone')}")
 
-        # 1 — Save to MongoDB
+        # Save to MongoDB
         doc_id = await save_enquiry(data)
-        logger.info(f"[popup] Saved MongoDB doc {doc_id} for {data['name']}")
+        logger.info(f"[popup] Saved to MongoDB: {doc_id}")
 
-        # 2 — Email + Sheets (background, non-blocking)
-        _run_side_effects(data, "popup")
+        # Add email + sheets as proper FastAPI background task
+        background_tasks.add_task(run_side_effects, data, "popup")
 
         return EnquiryResponse(
             success=True,
@@ -53,31 +52,32 @@ async def popup_enquiry(request: Request, body: PopupEnquiry):
         )
 
     except Exception as e:
-        logger.error(f"[popup] Unexpected error: {e}")
+        logger.error(f"[popup] Error: {e}")
         return EnquiryResponse(
             success=False,
             message="Something went wrong. Please try again or call us directly."
         )
 
 
-# ── Contact page form ───────────────────────────────────────────────────────
+# ── Contact page form ───────────────────────────────────────
 
 @router.post("/enquiry/contact", response_model=EnquiryResponse)
-@limiter.limit("3/minute")          # stricter — full form, less spammable
-async def contact_enquiry(request: Request, body: ContactEnquiry):
-    """
-    Handles the full contact page form.
-    Rate limited: 3 requests / minute per IP.
-    """
+@limiter.limit("3/minute")
+async def contact_enquiry(
+    request: Request,
+    body: ContactEnquiry,
+    background_tasks: BackgroundTasks
+):
     try:
         data = body.model_dump()
+        logger.info(f"[contact] Received from {data.get('name')} — {data.get('email')}")
 
-        # 1 — Save to MongoDB
+        # Save to MongoDB
         doc_id = await save_enquiry(data)
-        logger.info(f"[contact] Saved MongoDB doc {doc_id} for {data['name']}")
+        logger.info(f"[contact] Saved to MongoDB: {doc_id}")
 
-        # 2 — Email + Sheets (background, non-blocking)
-        _run_side_effects(data, "contact")
+        # Add email + sheets as proper FastAPI background task
+        background_tasks.add_task(run_side_effects, data, "contact")
 
         return EnquiryResponse(
             success=True,
@@ -85,14 +85,14 @@ async def contact_enquiry(request: Request, body: ContactEnquiry):
         )
 
     except Exception as e:
-        logger.error(f"[contact] Unexpected error: {e}")
+        logger.error(f"[contact] Error: {e}")
         return EnquiryResponse(
             success=False,
             message="Something went wrong. Please try again or call us directly."
         )
 
 
-# ── Health check ────────────────────────────────────────────────────────────
+# ── Health check ────────────────────────────────────────────
 
 @router.get("/health")
 async def health():
