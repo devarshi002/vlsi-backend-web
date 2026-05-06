@@ -92,7 +92,7 @@ async def send_alert_email(data: dict, form_type: str = "popup") -> bool:
         await aiosmtplib.send(
             msg,
             hostname="smtp.gmail.com",
-            port=465,
+            port=587,
             username=SMTP_EMAIL,
             password=SMTP_PASSWORD,
             use_tls=True,
