@@ -86,7 +86,7 @@ async def send_alert_email(data: dict, form_type: str = "popup") -> bool:
 
     payload = {
         "apikey":          ELASTIC_API_KEY,
-        "from":            ALERT_EMAIL,
+        "from":            SMTP_EMAIL,
         "fromName":        "NanoCore Leads",
         "to":              ALERT_EMAIL,
         "subject":         subject,
