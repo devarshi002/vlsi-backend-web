@@ -1,12 +1,13 @@
-import aiosmtplib
+import httpx
 import logging
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import os
 from datetime import datetime, timezone
 
-from app.config import SMTP_EMAIL, SMTP_PASSWORD, ALERT_EMAIL
+from app.config import SMTP_EMAIL, ALERT_EMAIL
 
 logger = logging.getLogger(__name__)
+
+ELASTIC_API_KEY = os.environ.get("ELASTIC_EMAIL_API_KEY")
 
 
 def _build_html(data: dict, form_type: str) -> str:
@@ -69,10 +70,10 @@ def _build_html(data: dict, form_type: str) -> str:
 
 async def send_alert_email(data: dict, form_type: str = "popup") -> bool:
     """
-    Async email via aiosmtplib — non-blocking, safe in FastAPI background tasks.
+    Async email via Elastic Email HTTP API — no SMTP, works on Render free plan.
     """
-    if not all([SMTP_EMAIL, SMTP_PASSWORD, ALERT_EMAIL]):
-        logger.error("❌ Email env vars missing: check SMTP_EMAIL, SMTP_PASSWORD, ALERT_EMAIL on Render")
+    if not ELASTIC_API_KEY:
+        logger.error("❌ ELASTIC_EMAIL_API_KEY not set on Render")
         return False
 
     subject_map = {
@@ -81,32 +82,35 @@ async def send_alert_email(data: dict, form_type: str = "popup") -> bool:
     }
     subject = f"{subject_map.get(form_type, '📩 New Enquiry')} — {data.get('name', 'Unknown')}"
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"]    = f"NanoCore Leads <{SMTP_EMAIL}>"
-    msg["To"]      = ALERT_EMAIL
-    msg["Reply-To"] = data.get("email", SMTP_EMAIL)
-    msg.attach(MIMEText(_build_html(data, form_type), "html"))
+    html_body = _build_html(data, form_type)
+
+    payload = {
+        "apikey":          ELASTIC_API_KEY,
+        "from":            SMTP_EMAIL,
+        "fromName":        "NanoCore Leads",
+        "to":              ALERT_EMAIL,
+        "subject":         subject,
+        "bodyHtml":        html_body,
+        "isTransactional": True,
+    }
 
     try:
-        await aiosmtplib.send(
-            msg,
-            hostname="smtp.gmail.com",
-            port=587,
-            username=SMTP_EMAIL,
-            password=SMTP_PASSWORD,
-            use_tls=True,
-            timeout=15,
-        )
-        logger.info(f"✅ Email sent for {data.get('name')} [{form_type}]")
-        return True
+        async with httpx.AsyncClient() as client:
+            res = await client.post(
+                "https://api.elasticemail.com/v2/email/send",
+                data=payload,
+                timeout=15,
+            )
 
-    except aiosmtplib.SMTPAuthenticationError:
-        logger.error("❌ SMTP auth failed — Gmail App Password wrong or 2FA not enabled")
-        return False
-    except aiosmtplib.SMTPException as e:
-        logger.error(f"❌ SMTP error: {e}")
-        return False
+        result = res.json()
+
+        if result.get("success"):
+            logger.info(f"✅ Email sent for {data.get('name')} [{form_type}]")
+            return True
+        else:
+            logger.error(f"❌ Elastic Email error: {result.get('error')}")
+            return False
+
     except Exception as e:
-        logger.error(f"❌ Email send failed: {e}", exc_info=True)
+        logger.error(f"❌ Email failed: {e}", exc_info=True)
         return False
