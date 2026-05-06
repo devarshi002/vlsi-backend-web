@@ -3,11 +3,13 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from app.config import SMTP_EMAIL, ALERT_EMAIL
+from app.config import ALERT_EMAIL
 
 logger = logging.getLogger(__name__)
 
-ELASTIC_API_KEY = os.environ.get("ELASTIC_EMAIL_API_KEY")
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY")
+SENDER_EMAIL  = "devarshitambulkar2@gmail.com"  # Brevo verified sender
+SENDER_NAME   = "NanoCore VLSI"
 
 
 def _build_html(data: dict, form_type: str) -> str:
@@ -60,7 +62,7 @@ def _build_html(data: dict, form_type: str) -> str:
         <!-- Footer -->
         <div style="background:#0d1f3c;padding:14px 20px;text-align:center;
           font-size:11px;color:#475569;border-top:1px solid #1e3a5f;">
-          This alert was sent automatically by NanoCore backend · Do not reply to this email
+          This alert was sent automatically by NanoCore backend · Do not reply
         </div>
       </div>
     </body>
@@ -70,10 +72,11 @@ def _build_html(data: dict, form_type: str) -> str:
 
 async def send_alert_email(data: dict, form_type: str = "popup") -> bool:
     """
-    Async email via Elastic Email HTTP API — no SMTP, works on Render free plan.
+    Async email via Brevo HTTP API — no SMTP, works on Render free plan.
+    300 emails/day free, no recipient restrictions.
     """
-    if not ELASTIC_API_KEY:
-        logger.error("❌ ELASTIC_EMAIL_API_KEY not set on Render")
+    if not BREVO_API_KEY:
+        logger.error("❌ BREVO_API_KEY not set on Render")
         return False
 
     subject_map = {
@@ -82,33 +85,33 @@ async def send_alert_email(data: dict, form_type: str = "popup") -> bool:
     }
     subject = f"{subject_map.get(form_type, '📩 New Enquiry')} — {data.get('name', 'Unknown')}"
 
-    html_body = _build_html(data, form_type)
-
     payload = {
-        "apikey":          ELASTIC_API_KEY,
-        "from":            SMTP_EMAIL,
-        "fromName":        "NanoCore Leads",
-        "to":              ALERT_EMAIL,
-        "subject":         subject,
-        "bodyHtml":        html_body,
-        "isTransactional": True,
+        "sender": {
+            "name":  SENDER_NAME,
+            "email": SENDER_EMAIL,
+        },
+        "to": [{"email": ALERT_EMAIL}],
+        "subject": subject,
+        "htmlContent": _build_html(data, form_type),
     }
 
     try:
         async with httpx.AsyncClient() as client:
             res = await client.post(
-                "https://api.elasticemail.com/v2/email/send",
-                data=payload,
+                "https://api.brevo.com/v3/smtp/email",
+                json=payload,
+                headers={
+                    "api-key":      BREVO_API_KEY,
+                    "Content-Type": "application/json",
+                },
                 timeout=15,
             )
 
-        result = res.json()
-
-        if result.get("success"):
+        if res.status_code == 201:
             logger.info(f"✅ Email sent for {data.get('name')} [{form_type}]")
             return True
         else:
-            logger.error(f"❌ Elastic Email error: {result.get('error')}")
+            logger.error(f"❌ Brevo error {res.status_code}: {res.text}")
             return False
 
     except Exception as e:
