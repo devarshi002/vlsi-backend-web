@@ -1,14 +1,12 @@
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Optional
 
 from app.config import GOOGLE_SHEET_ID, GOOGLE_CREDENTIALS_FILE
 
 logger = logging.getLogger(__name__)
 
 # Column headers for the Google Sheet
-# Row 1 is always the header row — created automatically on first run
 HEADERS = [
     "Timestamp", "Source", "Name", "Phone",
     "Email", "Course", "Mode", "Message"

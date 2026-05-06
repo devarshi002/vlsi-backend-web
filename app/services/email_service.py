@@ -1,4 +1,4 @@
-import smtplib
+import aiosmtplib
 import logging
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -67,11 +67,14 @@ def _build_html(data: dict, form_type: str) -> str:
     """
 
 
-def send_alert_email(data: dict, form_type: str = "popup") -> bool:
+async def send_alert_email(data: dict, form_type: str = "popup") -> bool:
     """
-    Send a lead alert email via Gmail SMTP.
-    Returns True on success, False on failure (non-blocking).
+    Async email via aiosmtplib — non-blocking, safe in FastAPI background tasks.
     """
+    if not all([SMTP_EMAIL, SMTP_PASSWORD, ALERT_EMAIL]):
+        logger.error("❌ Email env vars missing: check SMTP_EMAIL, SMTP_PASSWORD, ALERT_EMAIL on Render")
+        return False
+
     subject_map = {
         "popup":   "🚀 New Popup Lead",
         "contact": "📬 New Contact Form Submission",
@@ -83,19 +86,27 @@ def send_alert_email(data: dict, form_type: str = "popup") -> bool:
     msg["From"]    = f"NanoCore Leads <{SMTP_EMAIL}>"
     msg["To"]      = ALERT_EMAIL
     msg["Reply-To"] = data.get("email", SMTP_EMAIL)
-
-    html = _build_html(data, form_type)
-    msg.attach(MIMEText(html, "html"))
+    msg.attach(MIMEText(_build_html(data, form_type), "html"))
 
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
-            server.login(SMTP_EMAIL, SMTP_PASSWORD)
-            server.sendmail(SMTP_EMAIL, ALERT_EMAIL, msg.as_string())
-        logger.info(f"Alert email sent for {data.get('name')} via {form_type} form")
+        await aiosmtplib.send(
+            msg,
+            hostname="smtp.gmail.com",
+            port=465,
+            username=SMTP_EMAIL,
+            password=SMTP_PASSWORD,
+            use_tls=True,
+            timeout=15,
+        )
+        logger.info(f"✅ Email sent for {data.get('name')} [{form_type}]")
         return True
-    except smtplib.SMTPAuthenticationError:
-        logger.error("SMTP auth failed — check SMTP_EMAIL and SMTP_PASSWORD in .env")
+
+    except aiosmtplib.SMTPAuthenticationError:
+        logger.error("❌ SMTP auth failed — Gmail App Password wrong or 2FA not enabled")
+        return False
+    except aiosmtplib.SMTPException as e:
+        logger.error(f"❌ SMTP error: {e}")
         return False
     except Exception as e:
-        logger.error(f"Email send failed: {e}")
+        logger.error(f"❌ Email send failed: {e}", exc_info=True)
         return False

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from fastapi import APIRouter, Request, BackgroundTasks
 from slowapi import Limiter
@@ -14,16 +15,24 @@ limiter = Limiter(key_func=get_remote_address)
 
 
 async def run_side_effects(data: dict, form_type: str):
-    """Run email and sheets as FastAPI background tasks."""
+    """Run email (async) and sheets (sync in thread pool) as background tasks."""
     logger.info(f"[side_effects] Starting for {data.get('name')} via {form_type}")
-    
-    # Email
-    email_result = send_alert_email(data, form_type)
-    logger.info(f"[side_effects] Email result: {email_result}")
-    
-    # Sheets
-    sheets_result = append_to_sheet(data)
-    logger.info(f"[side_effects] Sheets result: {sheets_result}")
+
+    # ✅ Email — properly awaited now (async function)
+    try:
+        email_ok = await send_alert_email(data, form_type)
+        logger.info(f"[side_effects] Email: {'✅ sent' if email_ok else '❌ failed'}")
+    except Exception as e:
+        logger.error(f"[side_effects] Email crashed: {e}", exc_info=True)
+
+    # ✅ Sheets — sync library, run in thread pool so it doesn't block event loop
+    try:
+        sheets_ok = await asyncio.get_event_loop().run_in_executor(
+            None, append_to_sheet, data
+        )
+        logger.info(f"[side_effects] Sheets: {'✅ appended' if sheets_ok else '❌ failed'}")
+    except Exception as e:
+        logger.error(f"[side_effects] Sheets crashed: {e}", exc_info=True)
 
 
 # ── Popup form ──────────────────────────────────────────────
@@ -52,7 +61,7 @@ async def popup_enquiry(
         )
 
     except Exception as e:
-        logger.error(f"[popup] Error: {e}")
+        logger.error(f"[popup] Error: {e}", exc_info=True)
         return EnquiryResponse(
             success=False,
             message="Something went wrong. Please try again or call us directly."
@@ -85,7 +94,7 @@ async def contact_enquiry(
         )
 
     except Exception as e:
-        logger.error(f"[contact] Error: {e}")
+        logger.error(f"[contact] Error: {e}", exc_info=True)
         return EnquiryResponse(
             success=False,
             message="Something went wrong. Please try again or call us directly."
