@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -32,24 +34,11 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,   # must be False when allow_origins=["*"]
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
-
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error", "error": str(exc)},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "*",
-            "Access-Control-Allow-Headers": "*",
-        },
-    )
 
 # Attach rate limiter AFTER cors
 app.state.limiter = limiter
@@ -70,6 +59,24 @@ async def root():
     }
 
 
+# ── Keep-alive ───────────────────────────────────────────────
+async def keep_alive():
+    """Ping self every 5 minutes to prevent Render free plan sleep."""
+    await asyncio.sleep(60)  # Wait 1 min after startup
+    while True:
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.get(
+                    "https://vlsi-backend-web.onrender.com/",
+                    timeout=10,
+                )
+            logger.info("🟢 Keep-alive ping sent")
+        except Exception as e:
+            logger.warning(f"⚠️ Keep-alive failed: {e}")
+        await asyncio.sleep(5 * 60)  # Wait 5 minutes
+
+
+# ── Startup ──────────────────────────────────────────────────
 @app.on_event("startup")
 async def startup_event():
     logger.info("=== NanoCore Backend Starting ===")
@@ -79,3 +86,7 @@ async def startup_event():
     from app.services.database import ping_db
     db_ok = await ping_db()
     logger.info(f"MongoDB       : {'CONNECTED' if db_ok else 'FAILED'}")
+
+    # Start keep-alive background task
+    asyncio.create_task(keep_alive())
+    logger.info("🟢 Keep-alive task started")
